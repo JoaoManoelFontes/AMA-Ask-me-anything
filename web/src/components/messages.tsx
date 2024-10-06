@@ -20,6 +20,12 @@ export function Messages() {
     queryFn: () => getRoomMessages({ roomId }),
   });
 
+  interface MessageKind {
+    id: string;
+    message: string;
+    count: number;
+  }
+
   useEffect(() => {
     const ws = new WebSocket(`ws://localhost:8080/subscribe/${roomId}`);
 
@@ -34,10 +40,8 @@ export function Messages() {
           | "message_answered"
           | "message_reaction_increased"
           | "message_reaction_decreased";
-        value: any;
+        value: MessageKind;
       } = JSON.parse(event.data);
-
-      console.log(data);
 
       switch (data.kind) {
         case "message_created":
