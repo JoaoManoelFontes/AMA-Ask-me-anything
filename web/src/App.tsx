@@ -4,6 +4,7 @@ import { Room } from "./pages/room";
 import { Toaster } from "sonner";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./lib/react-query";
+import { MessageDetail } from "./pages/MessageDetail";
 
 const Router = createBrowserRouter([
   {
@@ -13,6 +14,10 @@ const Router = createBrowserRouter([
   {
     path: "/room/:roomId",
     element: <Room />,
+  },
+  {
+    path: "/room/:roomId/answers/:messageId",
+    element: <MessageDetail />,
   },
 ]);
 

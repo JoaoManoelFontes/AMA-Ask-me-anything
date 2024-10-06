@@ -68,3 +68,27 @@ func (h handler) readMessageParam(w http.ResponseWriter, r *http.Request) (messa
 
 	return message, rawMessageId, messageId, true
 }
+
+func (h handler) readAnswerParam(w http.ResponseWriter, r *http.Request) (answer pgstore.Answer, rawAnswerId string, answerId uuid.UUID, ok bool) {
+	rawAnswerId = chi.URLParam(r, "answer_id")
+
+	answerId, err := uuid.Parse(rawAnswerId)
+
+	if err != nil {
+		http.Error(w, "Invalid answer id", http.StatusBadRequest)
+		return pgstore.Answer{}, "", uuid.Nil, false
+	}
+
+	answer, err = h.q.GetAnswer(r.Context(), answerId)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "Answer not found", http.StatusBadRequest)
+			return pgstore.Answer{}, "", uuid.Nil, false
+		}
+		http.Error(w, "Failed to get answer", http.StatusBadRequest)
+		return pgstore.Answer{}, "", uuid.Nil, false
+	}
+
+	return answer, rawAnswerId, answerId, true
+}

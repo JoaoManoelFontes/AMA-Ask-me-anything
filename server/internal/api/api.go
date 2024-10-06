@@ -65,7 +65,13 @@ func NewHandler(q *pgstore.Queries) http.Handler {
 						r.Get("/", a.handlerGetRoomMessages)
 						r.Patch("/react", a.handlerReactToRoomMessage)
 						r.Delete("/react", a.handlerRemoveReatcionToRoomMessage)
-						r.Patch("/answer", a.handlerAnswerRoomMessage)
+
+						r.Route("/answer", func(r chi.Router) {
+							r.Get("/", a.handlerGetMessageAnswers)
+							r.Post("/", a.handlerAnswerRoomMessage)
+							r.Patch("/{answer_id}/react", a.handlerReactToAnswer)
+							r.Delete("/{answer_id}/react", a.handlerRemoveReactionToAnswer)
+						})
 					})
 				})
 			})
@@ -127,10 +133,12 @@ func (h handler) handlerSubscribeToRoom(w http.ResponseWriter, r *http.Request) 
 }
 
 const (
-	MessageKindMessageCreated          = "message_created"
-	MessageKindMessageRactionIncreased = "message_reaction_increased"
-	MessageKindMessageRactionDecreased = "message_reaction_decreased"
-	MessageKindMessageAnswered         = "message_answered"
+	MessageKindMessageCreated                 = "message_created"
+	MessageKindMessageRactionIncreased        = "message_reaction_increased"
+	MessageKindMessageRactionDecreased        = "message_reaction_decreased"
+	MessageKindMessageAnswered                = "message_answered"
+	MessageKindMessageAnswerReactionIncreased = "message_answer_reaction_increased"
+	MessageKindMessageAnswerReactionDecreased = "message_answer_reaction_decreased"
 )
 
 type MessageMessageReactionIncreased struct {
@@ -144,7 +152,8 @@ type MessageMessageReactionDecreased struct {
 }
 
 type MessageMessageAnswered struct {
-	ID string `json:"id"`
+	ID     string `json:"id"`
+	Answer string `json:"answer"`
 }
 
 type MessageMessageCreated struct {
@@ -156,6 +165,17 @@ type Message struct {
 	Kind   string `json:"kind"`
 	Value  any    `json:"value"`
 	RoomId string `json:"-"`
+}
+
+type Answer struct {
+	ID        string `json:"id"`
+	Value     any    `json:"value"`
+	RoomId    string `json:"-"`
+	MessageId string `json:"-"`
+}
+
+type Notification struct {
+	Payload interface{}
 }
 
 func (h handler) notifySubscribers(msg Message) {
@@ -350,6 +370,15 @@ func (h handler) handlerRemoveReatcionToRoomMessage(w http.ResponseWriter, r *ht
 	})
 }
 func (h handler) handlerAnswerRoomMessage(w http.ResponseWriter, r *http.Request) {
+
+	type _body struct {
+		Answer string `json:"answer"`
+	}
+
+	type response struct {
+		ID string `json:"id"`
+	}
+
 	_, _, roomId, roomParamOk := h.readRoomParam(w, r)
 
 	if !roomParamOk {
@@ -362,6 +391,13 @@ func (h handler) handlerAnswerRoomMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	var body _body
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	err := h.q.MarkMessageAsAnswered(r.Context(), messageId)
 
 	if err != nil {
@@ -370,13 +406,141 @@ func (h handler) handlerAnswerRoomMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	answerId, err := h.q.InsertAnswer(r.Context(), pgstore.InsertAnswerParams{
+		MessageID: messageId,
+		Answer:    body.Answer,
+	})
+
+	if err != nil {
+		slog.Error("Failed to insert answer", "Error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	sendResponse(w, response{ID: answerId.String()})
 
 	go h.notifySubscribers(Message{
 		Kind:   MessageKindMessageAnswered,
 		RoomId: roomId.String(),
 		Value: MessageMessageAnswered{
-			ID: messageId.String(),
+			ID:     messageId.String(),
+			Answer: body.Answer,
+		},
+	})
+}
+
+func (h handler) handlerGetMessageAnswers(w http.ResponseWriter, r *http.Request) {
+	_, _, _, roomParamOk := h.readRoomParam(w, r)
+
+	if !roomParamOk {
+		return
+	}
+
+	_, _, messageId, messageParamOk := h.readMessageParam(w, r)
+
+	if !messageParamOk {
+		return
+	}
+
+	answers, err := h.q.GetAnswers(r.Context(), messageId)
+
+	if err != nil {
+		slog.Error("Failed to get answers", "Error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	sendResponse(w, answers)
+}
+
+func (h handler) handlerReactToAnswer(w http.ResponseWriter, r *http.Request) {
+	type response struct {
+		Count int64 `json:"count"`
+	}
+
+	_, _, roomId, roomParamOk := h.readRoomParam(w, r)
+
+	if !roomParamOk {
+		return
+	}
+
+	_, _, messageId, messageParamOk := h.readMessageParam(w, r)
+
+	if !messageParamOk {
+		return
+	}
+
+	_, _, answerId, answerParamOk := h.readAnswerParam(w, r)
+
+	if !answerParamOk {
+		return
+	}
+
+	count, err := h.q.ReactToAnswer(r.Context(), pgstore.ReactToAnswerParams{
+		ID:        answerId,
+		MessageID: messageId,
+	})
+
+	if err != nil {
+		slog.Error("Failed to react to answer", "Error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	sendResponse(w, response{Count: count})
+
+	go h.notifySubscribers(Message{
+		Kind:   MessageKindMessageAnswerReactionIncreased,
+		RoomId: roomId.String(),
+		Value: MessageMessageReactionIncreased{
+			ID:    messageId.String(),
+			Count: count,
+		},
+	})
+}
+
+func (h handler) handlerRemoveReactionToAnswer(w http.ResponseWriter, r *http.Request) {
+	type response struct {
+		Count int64 `json:"count"`
+	}
+
+	_, _, roomId, roomParamOk := h.readRoomParam(w, r)
+
+	if !roomParamOk {
+		return
+	}
+
+	_, _, messageId, messageParamOk := h.readMessageParam(w, r)
+
+	if !messageParamOk {
+		return
+	}
+
+	_, _, answerId, answerParamOk := h.readAnswerParam(w, r)
+
+	if !answerParamOk {
+		return
+	}
+
+	count, err := h.q.RemoveReactionFromAnswer(r.Context(), pgstore.RemoveReactionFromAnswerParams{
+		ID:        answerId,
+		MessageID: messageId,
+	})
+
+	if err != nil {
+		slog.Error("Failed to remove reaction to answer", "Error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	sendResponse(w, response{Count: count})
+
+	go h.notifySubscribers(Message{
+		Kind:   MessageKindMessageAnswerReactionDecreased,
+		RoomId: roomId.String(),
+		Value: MessageMessageReactionDecreased{
+			ID:    messageId.String(),
+			Count: count,
 		},
 	})
 }

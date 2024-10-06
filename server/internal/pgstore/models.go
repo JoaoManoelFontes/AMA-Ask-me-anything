@@ -8,6 +8,13 @@ import (
 	"github.com/google/uuid"
 )
 
+type Answer struct {
+	ID            uuid.UUID
+	MessageID     uuid.UUID
+	Answer        string
+	ReactionCount int64
+}
+
 type Message struct {
 	ID            uuid.UUID
 	RoomID        uuid.UUID
